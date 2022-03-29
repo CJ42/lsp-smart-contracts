@@ -119,7 +119,7 @@ export const testAttackVectors = (
     });
   });
 
-  describe.only("reentrancy: malicious contract with permission CALL + TRANSFERVALUE drains all funds via `receive()` function", () => {
+  describe.skip("reentrancy: malicious contract with permission CALL + TRANSFERVALUE drains all funds via `receive()` function", () => {
     let attacker: SignerWithAddress;
 
     let attackerContract: MaliciousAccount;
@@ -202,6 +202,219 @@ export const testAttackVectors = (
         context.universalProfile.address
       );
       console.log("profileBalanceFinal: ", profileBalanceFinal);
+    });
+  });
+
+  // anyone with the permission CHANGEPERMISSIONS can set all the permissions
+  // for itself and do whatever they want in the UP
+  describe("greedy CHANGEPERMISSIONS", () => {
+    let maliciousControllerCanChangePermissions: SignerWithAddress;
+
+    beforeAll(async () => {
+      context = await buildContext();
+
+      maliciousControllerCanChangePermissions = context.accounts[1];
+
+      const permissionKeys = [
+        ERC725YKeys.LSP6["AddressPermissions:Permissions"] +
+          context.owner.address.substring(2),
+        ERC725YKeys.LSP6["AddressPermissions:Permissions"] +
+          maliciousControllerCanChangePermissions.address.substring(2),
+      ];
+
+      const permissionValues = [
+        ALL_PERMISSIONS_SET,
+        ethers.utils.hexZeroPad(PERMISSIONS.CHANGEPERMISSIONS, 32),
+      ];
+
+      await setupKeyManager(context, permissionKeys, permissionValues);
+
+      await context.owner.sendTransaction({
+        to: context.universalProfile.address,
+        value: ethers.utils.parseEther("10"),
+      });
+    });
+
+    it("caller should be allowed to change permissions for itself", async () => {
+      const key =
+        ERC725YKeys.LSP6["AddressPermissions:Permissions"] +
+        maliciousControllerCanChangePermissions.address.substring(2);
+
+      let [initialPermissions] = await context.universalProfile.getData([key]);
+      expect(initialPermissions).toEqual(
+        ethers.utils.hexZeroPad(PERMISSIONS.CHANGEPERMISSIONS, 32)
+      );
+
+      const value = ALL_PERMISSIONS_SET;
+
+      let payload = context.universalProfile.interface.encodeFunctionData(
+        "setData",
+        [[key], [value]]
+      );
+
+      await context.keyManager
+        .connect(maliciousControllerCanChangePermissions)
+        .execute(payload);
+
+      let [newPermissions] = await context.universalProfile.getData([key]);
+
+      expect(newPermissions).toEqual(ALL_PERMISSIONS_SET);
+    });
+
+    describe("once caller managed to give itself ALL PERMISSIONS...", () => {
+      it("should be allowed to transfer itself some LYX from the UP", async () => {
+        let balanceCallerBefore = await provider.getBalance(
+          maliciousControllerCanChangePermissions.address
+        );
+        let balanceUPBefore = await provider.getBalance(
+          context.universalProfile.address
+        );
+
+        expect(balanceUPBefore).toEqBN(ethers.utils.parseEther("10"));
+
+        let payload = context.universalProfile.interface.encodeFunctionData(
+          "execute",
+          [
+            OPERATIONS.CALL,
+            maliciousControllerCanChangePermissions.address,
+            ethers.utils.parseEther("5"),
+            "0x",
+          ]
+        );
+
+        await context.keyManager
+          .connect(maliciousControllerCanChangePermissions)
+          .execute(payload);
+
+        let balanceCallerAfter = await provider.getBalance(
+          maliciousControllerCanChangePermissions.address
+        );
+        let balanceUPAfter = await provider.getBalance(
+          context.universalProfile.address
+        );
+        // expect(balanceCallerAfter).toEqBN(
+        //   (
+        //     await provider.getBalance(
+        //       maliciousControllerCanChangePermissions.address
+        //     )
+        //   ).add(ethers.utils.parseEther("5"))
+        // );
+        expect(balanceUPAfter).toEqBN(ethers.utils.parseEther("5"));
+      });
+
+      it("should be allowed to take over the control of the UP by calling `transferOwnership(...)`", async () => {
+        let currentOwner = await context.universalProfile.owner();
+        expect(currentOwner).toEqual(context.keyManager.address);
+
+        let takeOverPayload =
+          context.universalProfile.interface.encodeFunctionData(
+            "transferOwnership",
+            [maliciousControllerCanChangePermissions.address]
+          );
+
+        await context.keyManager
+          .connect(maliciousControllerCanChangePermissions)
+          .execute(takeOverPayload);
+
+        let newOwner = await context.universalProfile.owner();
+        expect(newOwner).toEqual(
+          maliciousControllerCanChangePermissions.address
+        );
+      });
+    });
+  });
+
+  // anyone with the permission ADDPERMISSIONS can:
+  //    1) create a new controller key
+  //    2) grant it ALL PERMISSIONS
+  //    3) use this new controller key to take over the UP, drain funds, or do anything else
+  describe("greedy ADDPERMISSIONS", () => {
+    let maliciousControllerCanAddPermissions: SignerWithAddress;
+
+    let newMaliciousControllerKey;
+
+    beforeAll(async () => {
+      context = await buildContext();
+
+      maliciousControllerCanAddPermissions = context.accounts[1];
+
+      const permissionKeys = [
+        ERC725YKeys.LSP6["AddressPermissions:Permissions"] +
+          context.owner.address.substring(2),
+        ERC725YKeys.LSP6["AddressPermissions:Permissions"] +
+          maliciousControllerCanAddPermissions.address.substring(2),
+      ];
+
+      const permissionValues = [
+        ALL_PERMISSIONS_SET,
+        ethers.utils.hexZeroPad(PERMISSIONS.ADDPERMISSIONS, 32),
+      ];
+
+      await setupKeyManager(context, permissionKeys, permissionValues);
+
+      await context.owner.sendTransaction({
+        to: context.universalProfile.address,
+        value: ethers.utils.parseEther("10"),
+      });
+    });
+
+    it("can create a new controller address and give it ALL PERMISSIONS", async () => {
+      newMaliciousControllerKey = ethers.Wallet.createRandom();
+      newMaliciousControllerKey = newMaliciousControllerKey.connect(provider);
+
+      // fund this new controller key
+      // so that we can use it to take over the UP afterwards
+      await maliciousControllerCanAddPermissions.sendTransaction({
+        to: newMaliciousControllerKey.address,
+        value: ethers.utils.parseEther("5"),
+      });
+
+      let key =
+        ERC725YKeys.LSP6["AddressPermissions:Permissions"] +
+        newMaliciousControllerKey.address.substring(2);
+
+      let value = ALL_PERMISSIONS_SET;
+
+      let maliciousPayload =
+        context.universalProfile.interface.encodeFunctionData("setData", [
+          [key],
+          [value],
+        ]);
+
+      await context.keyManager
+        .connect(maliciousControllerCanAddPermissions)
+        .execute(maliciousPayload);
+
+      const [result] = await context.universalProfile.getData([key]);
+      expect(result).toEqual(ALL_PERMISSIONS_SET);
+    });
+
+    describe("this new malicious controller key can then do whatever it want, like...", () => {
+      it("send LYX to its address", async () => {
+        let balanceUPBefore = await provider.getBalance(
+          context.universalProfile.address
+        );
+        expect(balanceUPBefore).toEqual(ethers.utils.parseEther("10"));
+
+        let payload = context.universalProfile.interface.encodeFunctionData(
+          "execute",
+          [
+            OPERATIONS.CALL,
+            newMaliciousControllerKey.address,
+            ethers.utils.parseEther("5"),
+            "0x",
+          ]
+        );
+
+        await context.keyManager
+          .connect(newMaliciousControllerKey)
+          .execute(payload);
+
+        let balanceUPAfter = await provider.getBalance(
+          context.universalProfile.address
+        );
+        expect(balanceUPAfter).toEqual(ethers.utils.parseEther("5"));
+      });
     });
   });
 };
