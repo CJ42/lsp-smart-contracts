@@ -207,7 +207,7 @@ export const testAttackVectors = (
 
   // anyone with the permission CHANGEPERMISSIONS can set all the permissions
   // for itself and do whatever they want in the UP
-  describe("greedy CHANGEPERMISSIONS", () => {
+  describe.skip("greedy CHANGEPERMISSIONS", () => {
     let maliciousControllerCanChangePermissions: SignerWithAddress;
 
     beforeAll(async () => {
@@ -328,7 +328,7 @@ export const testAttackVectors = (
   //    1) create a new controller key
   //    2) grant it ALL PERMISSIONS
   //    3) use this new controller key to take over the UP, drain funds, or do anything else
-  describe("greedy ADDPERMISSIONS", () => {
+  describe.skip("greedy ADDPERMISSIONS", () => {
     let maliciousControllerCanAddPermissions: SignerWithAddress;
 
     let newMaliciousControllerKey;
@@ -414,6 +414,57 @@ export const testAttackVectors = (
           context.universalProfile.address
         );
         expect(balanceUPAfter).toEqual(ethers.utils.parseEther("5"));
+      });
+    });
+  });
+
+  describe("stress test KeyManager", () => {
+    // raw call via KeyManager to all possible functions present in the UniversalProfile.
+
+    // try if you have ALL PERMISSIONS
+    beforeAll(async () => {
+      context = await buildContext();
+
+      const permissionKeys = [
+        ERC725YKeys.LSP6["AddressPermissions:Permissions"] +
+          context.owner.address.substring(2),
+      ];
+
+      const permissionsValues = [ALL_PERMISSIONS_SET];
+
+      await setupKeyManager(context, permissionKeys, permissionsValues);
+    });
+
+    describe("when calling the `renounceOwnership(...)` function", () => {
+      it("should make the UP owner as address zero", async () => {
+        let currentOwner = await context.universalProfile.owner();
+        expect(currentOwner).toEqual(context.keyManager.address);
+
+        let payload =
+          context.universalProfile.interface.encodeFunctionData(
+            "renounceOwnership"
+          );
+
+        await context.keyManager.connect(context.owner).execute(payload);
+
+        let newOwner = await context.universalProfile.owner();
+        expect(newOwner).toEqual(ethers.constants.AddressZero);
+      });
+
+      it("should stuck the UP afterwards, as caller is not the owner anymore", async () => {
+        let key = ethers.utils.keccak256(ethers.utils.toUtf8Bytes("Some Key"));
+        let value = ethers.utils.hexlify(
+          ethers.utils.toUtf8Bytes("Some value")
+        );
+
+        let payload = context.universalProfile.interface.encodeFunctionData(
+          "setData",
+          [[key], [value]]
+        );
+
+        await expect(
+          context.keyManager.connect(context.owner).execute(payload)
+        ).toBeRevertedWith("Ownable: caller is not the owner");
       });
     });
   });
