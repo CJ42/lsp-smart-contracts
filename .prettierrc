@@ -18,6 +18,14 @@
         "printWidth": 80,
         "compiler": "0.8.15"
       }
+    },
+    {
+      "files": "contracts/LSP6KeyManager/LSP6KeyManagerV2.sol",
+      "options": {
+        "tabWidth": 4,
+        "printWidth": 100,
+        "compiler": "0.8.17"
+      }
     }
   ]
 }
