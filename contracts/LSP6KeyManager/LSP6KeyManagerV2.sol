@@ -7,6 +7,7 @@ import {ILSP20CallVerifier as ILSP20} from "../LSP20CallVerification/ILSP20CallV
 
 // libraries
 import {LSP2Utils} from "../LSP2ERC725YJSONSchema/LSP2Utils.sol";
+import {LSP6Utils} from "../LSP6KeyManager/LSP6Utils.sol";
 
 // constants
 import {
@@ -63,6 +64,7 @@ using {contains, set} for Permission;
 
 contract LSP6KeyManagerV2 {
     using LSP2Utils for bytes10;
+    using LSP6Utils for *;
 
     address _target;
 
@@ -86,6 +88,8 @@ contract LSP6KeyManagerV2 {
         uint256 /* msgValue */,
         bytes calldata callData
     ) external virtual returns (bytes4) {
+        console.log(gasleft());
+
         bytes4 erc725Function = bytes4(callData);
 
         if (erc725Function == IERC725Y.setData.selector) {
@@ -109,25 +113,18 @@ contract LSP6KeyManagerV2 {
         address targetContract,
         address caller
     ) internal view {
-        bytes32[] memory dataKeysToFetch = new bytes32[](3);
+        console.log(gasleft());
 
         // AddressPermissions:Permissions:<caller>
-        dataKeysToFetch[0] = _LSP6KEY_ADDRESSPERMISSIONS_PERMISSIONS_PREFIX.generateMappingKey(
-            bytes20(caller)
-        );
+        bytes32 permissions = IERC725Y(targetContract).getPermissionsFor(caller);
 
-        // AddressPermissions:AllowedERC725YDataKeys:<caller>
-        dataKeysToFetch[1] = _LSP6KEY_ADDRESSPERMISSIONS_AllowedERC725YDataKeys_PREFIX
-            .generateMappingWithGroupingKey(bytes20(caller));
+        if (permissions == bytes32(0)) revert NoPermissionsSet(caller);
 
-        // value for `inputDataKey`
-        dataKeysToFetch[2] = inputDataKey;
+        console.log(gasleft());
+        Permission callerPermissions = Permission.wrap(permissions);
+        console.log(gasleft());
 
-        bytes[] memory currentDataValues = IERC725Y(targetContract).getDataBatch(dataKeysToFetch);
-
-        Permission callerPermissions = Permission.wrap(bytes32(currentDataValues[0]));
-
-        if (Permission.unwrap(callerPermissions) == bytes32(0)) revert NoPermissionsSet(caller);
+        // bytes32[] memory dataKeysToFetch = new bytes32[](2);
 
         if (bytes12(inputDataKey) == _LSP6KEY_ADDRESSPERMISSIONS_PERMISSIONS_PREFIX) {
             // AddressPermissions:Permissions:<address>
@@ -149,27 +146,44 @@ contract LSP6KeyManagerV2 {
         } else {
             // TODO: save these constants as user-defined value types
 
+            console.log(gasleft());
+
             // Skip if controller has SUPER SETDATA permissions
             if (callerPermissions.contains(Permission.wrap(_PERMISSION_SUPER_SETDATA))) return;
 
-            console.logBytes32(Permission.unwrap(callerPermissions));
-            console.logBytes32(_PERMISSION_SETDATA);
+            console.log(gasleft());
 
             // Check if controller has permission SETDATA
             if (!callerPermissions.contains(Permission.wrap(_PERMISSION_SETDATA))) {
                 revert("Not authorised to set data!");
             }
 
+            console.log(gasleft());
+
+            // AddressPermissions:AllowedERC725YDataKeys:<caller>
+            // dataKeysToFetch[0] = _LSP6KEY_ADDRESSPERMISSIONS_AllowedERC725YDataKeys_PREFIX
+            //     .generateMappingWithGroupingKey(bytes20(caller));
+
+            // value for `inputDataKey`
+            // dataKeysToFetch[1] = inputDataKey;
+
+            // bytes[] memory currentDataValues = IERC725Y(targetContract).getDataBatch(
+            //     dataKeysToFetch
+            // );
+
             // 3. Check if it is an Allowed ERC725Y Data Keys
             if (
                 !_isAllowedERC725YDataKey({
                     dataKeyToVerify: inputDataKey,
                     // TODO: user-defined value type for Allowed ERC725Y Data Keys?
-                    allowedERC725YDataKeysCompacted: currentDataValues[1]
+                    allowedERC725YDataKeysCompacted: IERC725Y(targetContract)
+                        .getAllowedERC725YDataKeysFor(caller)
                 })
             ) {
                 revert("Not allowed ERC725Y Data Key");
             }
+
+            console.log(gasleft());
         }
     }
 
